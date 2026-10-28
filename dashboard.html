@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BoardBox · My notes</title>
+<style>
+:root{--bg:#0f1a17;--panel:#16251f;--line:#2a4038;--ink:#e8f1ec;--mute:#8fa89d;--acc:#7be0a8;--bad:#ff8a7a}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.4 system-ui,sans-serif}
+main{max-width:1100px;margin:0 auto;padding:20px}
+h1{margin:0 0 16px;font-size:26px}
+input,select,button{font:inherit;color:var(--ink);background:#0c1411;border:1px solid var(--line);border-radius:8px;padding:10px 12px}
+button{cursor:pointer;background:var(--acc);color:#06210f;border:0;font-weight:700}
+button.ghost{background:transparent;color:var(--ink);border:1px solid var(--line)}
+.row{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px}.grow{flex:1;min-width:160px}
+#grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:14px}
+.t{background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden;display:flex;flex-direction:column}
+.t a.th{display:block;height:150px;background:#000;color:var(--mute);text-align:center;line-height:150px;text-decoration:none}
+.t img{width:100%;height:150px;object-fit:cover;display:block}
+.t .m{padding:10px;font-size:14px}.t .m b{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.t .m span{color:var(--mute)}
+.t .x{margin:0 10px 10px;padding:6px;font-size:13px;background:transparent;color:var(--bad);border:1px solid var(--line)}
+.hide{display:none}.err{color:var(--bad)}
+</style></head>
+<body><main>
+<h1>BoardBox</h1>
+
+<form id="login" class="row" onsubmit="return false">
+  <input id="em" class="grow" type="email" placeholder="Your email" autocomplete="username">
+  <input id="pw" class="grow" type="password" placeholder="Password" autocomplete="current-password">
+  <button id="go">Log in</button>
+  <span id="lerr" class="err"></span>
+</form>
+
+<div id="app" class="hide">
+  <div class="row">
+    <input id="q" class="grow" placeholder="Search file name">
+    <select id="sub"><option value="">All subjects</option></select>
+    <input id="from" type="date"><input id="to" type="date">
+    <button class="ghost" id="out">Log out</button>
+  </div>
+  <div id="count" style="color:var(--mute);margin-bottom:10px"></div>
+  <div id="grid"></div>
+</div>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+<script src="config.js"></script>
+<script>
+const C=window.CFG, sb=supabase.createClient(C.SUPABASE_URL,C.SUPABASE_ANON_KEY);
+const $=id=>document.getElementById(id);
+let rows=[];
+
+async function init(){
+  const {data}=await sb.auth.getSession();
+  if(data.session) enter();
+}
+async function enter(){
+  $('login').classList.add('hide'); $('app').classList.remove('hide');
+  const {data,error}=await sb.from('notes').select('*').order('created_at',{ascending:false}).limit(500);
+  if(error){ alert(error.message); return; }
+  rows=data;
+  const subs=[...new Set(rows.map(r=>r.subject))].sort();
+  $('sub').innerHTML='<option value="">All subjects</option>'+subs.map(s=>`<option>${esc(s)}</option>`).join('');
+  render();
+}
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+async function render(){
+  const q=$('q').value.toLowerCase(), s=$('sub').value, f=$('from').value, t=$('to').value;
+  const list=rows.filter(r=>
+    (!q||r.filename.toLowerCase().includes(q)) && (!s||r.subject===s) &&
+    (!f||r.created_at.slice(0,10)>=f) && (!t||r.created_at.slice(0,10)<=t));
+  $('count').textContent=list.length+' file'+(list.length===1?'':'s');
+  const {data}=await sb.storage.from('notes').createSignedUrls(list.map(r=>r.path),3600);
+  const url={}; (data||[]).forEach(d=>url[d.path]=d.signedUrl);
+  $('grid').innerHTML=list.map(r=>{
+    const u=url[r.path]||'#', isImg=(r.mime||'').startsWith('image/');
+    return `<div class="t"><a class="th" href="${u}" target="_blank">${isImg?`<img loading="lazy" src="${u}">`:esc((r.filename.split('.').pop()||'file').toUpperCase().slice(0,5))}</a>
+    <div class="m"><b title="${esc(r.filename)}">${esc(r.filename)}</b><span>${esc(r.subject)} · ${new Date(r.created_at).toLocaleDateString()}</span></div>
+    <button class="x" data-id="${r.id}">Delete</button></div>`}).join('');
+}
+['q','sub','from','to'].forEach(id=>$(id).addEventListener('input',render));
+
+$('grid').addEventListener('click',async e=>{
+  const id=e.target.dataset.id; if(!id||!confirm('Delete this file?')) return;
+  const r=rows.find(x=>x.id===id);
+  await sb.storage.from('notes').remove([r.path]);
+  await sb.from('notes').delete().eq('id',id);
+  rows=rows.filter(x=>x.id!==id); render();
+});
+$('go').onclick=async()=>{
+  const {error}=await sb.auth.signInWithPassword({email:$('em').value,password:$('pw').value});
+  if(error) $('lerr').textContent='Login failed.'; else enter();
+};
+$('out').onclick=async()=>{await sb.auth.signOut(); location.reload();};
+init();
+</script>
+</body></html>
